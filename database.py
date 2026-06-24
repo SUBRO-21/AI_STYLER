@@ -31,6 +31,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS items (
                 id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 image_path TEXT NOT NULL,
                 category TEXT,
                 sub_type TEXT,
@@ -46,6 +47,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS feedback (
                 id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 outfit_items TEXT, weather_fit TEXT, event_fit TEXT,
                 overall_note TEXT, feedback_type TEXT, feedback_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -54,16 +56,30 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS outfit_history (
                 id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 item_ids TEXT NOT NULL,
                 event_description TEXT,
                 date TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # PostgreSQL column migrations (idempotent via DO blocks)
+        for table, col, defn in [
+            ('items',         'user_id', "TEXT NOT NULL DEFAULT 'dev-user'"),
+            ('feedback',      'user_id', "TEXT NOT NULL DEFAULT 'dev-user'"),
+            ('outfit_history','user_id', "TEXT NOT NULL DEFAULT 'dev-user'"),
+        ]:
+            cursor.execute(f"""
+                DO $$ BEGIN
+                  ALTER TABLE {table} ADD COLUMN {col} {defn};
+                EXCEPTION WHEN duplicate_column THEN NULL;
+                END $$;
+            """)
     else:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 image_path TEXT NOT NULL,
                 category TEXT,
                 sub_type TEXT,
@@ -79,6 +95,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 outfit_items TEXT, weather_fit TEXT, event_fit TEXT,
                 overall_note TEXT, feedback_type TEXT, feedback_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -87,6 +104,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS outfit_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'dev-user',
                 item_ids TEXT NOT NULL,
                 event_description TEXT,
                 date TEXT,
@@ -94,14 +112,18 @@ def init_db():
             )
         ''')
 
-        # Migrations for existing SQLite tables
-        for col, defn in [
-            ('sub_type', 'TEXT'),
-            ('availability', "TEXT DEFAULT 'available'"),
-            ('availability_updated_at', 'TIMESTAMP'),
-        ]:
-            if not _col_exists(cursor, 'items', col):
-                cursor.execute(f'ALTER TABLE items ADD COLUMN {col} {defn}')
+        # SQLite column migrations (add any missing columns)
+        migrations = [
+            ('items',          'sub_type',                'TEXT'),
+            ('items',          'availability',            "TEXT DEFAULT 'available'"),
+            ('items',          'availability_updated_at', 'TIMESTAMP'),
+            ('items',          'user_id',                 "TEXT NOT NULL DEFAULT 'dev-user'"),
+            ('feedback',       'user_id',                 "TEXT NOT NULL DEFAULT 'dev-user'"),
+            ('outfit_history', 'user_id',                 "TEXT NOT NULL DEFAULT 'dev-user'"),
+        ]
+        for table, col, defn in migrations:
+            if not _col_exists(cursor, table, col):
+                cursor.execute(f'ALTER TABLE {table} ADD COLUMN {col} {defn}')
 
         # Backfill availability from old boolean column
         cursor.execute(
@@ -110,6 +132,10 @@ def init_db():
         cursor.execute(
             "UPDATE items SET availability = 'damaged' WHERE availability IS NULL AND available = 0"
         )
+        # Backfill user_id for pre-auth rows so dev-user can still see them
+        cursor.execute("UPDATE items SET user_id = 'dev-user' WHERE user_id IS NULL OR user_id = ''")
+        cursor.execute("UPDATE feedback SET user_id = 'dev-user' WHERE user_id IS NULL OR user_id = ''")
+        cursor.execute("UPDATE outfit_history SET user_id = 'dev-user' WHERE user_id IS NULL OR user_id = ''")
 
     conn.commit()
     conn.close()
