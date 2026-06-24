@@ -177,13 +177,14 @@ def delete_account(user_id: str = Depends(get_current_user)):
 async def upload_image(
     file: UploadFile = File(...),
     user_id: str = Depends(get_current_user),
+    x_gemini_key: Optional[str] = Header(default=None),
 ):
     safe_name = os.path.basename(file.filename)
     local_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(local_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
     try:
-        tags = llm_service.analyze_image_for_tags(local_path)
+        tags = llm_service.analyze_image_for_tags(local_path, user_key=x_gemini_key)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=422, detail=f"Image analysis failed: {e}")
@@ -301,7 +302,11 @@ def get_weather(event: EventInput, user_id: str = Depends(get_current_user)):
 
 
 @app.post("/api/generate")
-def generate_outfit(req: OutfitGenerationRequest, user_id: str = Depends(get_current_user)):
+def generate_outfit(
+    req: OutfitGenerationRequest,
+    user_id: str = Depends(get_current_user),
+    x_gemini_key: Optional[str] = Header(default=None),
+):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -312,7 +317,8 @@ def generate_outfit(req: OutfitGenerationRequest, user_id: str = Depends(get_cur
     available_items = [dict(row) for row in cursor.fetchall()]
     conn.close()
 
-    outfits = llm_service.generate_outfits(available_items, req.event, req.weather)
+    outfits = llm_service.generate_outfits(available_items, req.event, req.weather,
+                                            user_key=x_gemini_key)
     if not outfits:
         return {"outfits": []}
 
@@ -326,7 +332,9 @@ def generate_outfit(req: OutfitGenerationRequest, user_id: str = Depends(get_cur
             for iid in outfit.get('item_ids', [])
             if iid in items_map
         ]
-        return llm_service.generate_outfit_image(paths, req.event, user_photo_path=user_photo)
+        return llm_service.generate_outfit_image(paths, req.event,
+                                                  user_photo_path=user_photo,
+                                                  user_key=x_gemini_key)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {pool.submit(gen_image, outfit): i for i, outfit in enumerate(outfits)}

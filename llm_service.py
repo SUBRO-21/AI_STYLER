@@ -7,7 +7,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
+_server_api_key = os.getenv("GEMINI_API_KEY")
+
+PLACEHOLDER = "your_gemini_api_key_here"
+
+
+def _resolve_key(user_key: str = None) -> str | None:
+    """Return user-supplied key if valid, else fall back to server key."""
+    if user_key and user_key.strip() and user_key.strip() != PLACEHOLDER:
+        return user_key.strip()
+    if _server_api_key and _server_api_key != PLACEHOLDER:
+        return _server_api_key
+    return None
 
 
 def _parse_json(text: str):
@@ -23,16 +34,13 @@ def _parse_json(text: str):
 
 # ── Vision tagging ────────────────────────────────────────────────────────────
 
-def analyze_image_for_tags(file_path: str) -> dict:
+def analyze_image_for_tags(file_path: str, user_key: str = None) -> dict:
     """Raises on failure — caller must handle and return HTTP error."""
-    if not api_key or api_key == "your_gemini_api_key_here":
-        return {
-            "category": "top", "sub_type": None,
-            "color": "Mustard (Wada Sanzo)", "formality": "casual",
-            "description": "Stub: no API key configured."
-        }
+    key = _resolve_key(user_key)
+    if not key:
+        raise ValueError("No Gemini API key configured. Add yours in Settings.")
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=key)
     sample_file = client.files.upload(file=file_path)
     try:
         response = client.models.generate_content(
@@ -51,7 +59,7 @@ Return raw JSON only — no markdown, no code fences.
         return _parse_json(response.text)
     except Exception:
         traceback.print_exc()
-        raise   # propagate to FastAPI endpoint which returns HTTP 422
+        raise
     finally:
         try:
             client.files.delete(name=sample_file.name)
@@ -61,21 +69,14 @@ Return raw JSON only — no markdown, no code fences.
 
 # ── Outfit generation ─────────────────────────────────────────────────────────
 
-def generate_outfits(available_items: list, event_description: str, weather_data: dict) -> list:
-    if not api_key or api_key == "your_gemini_api_key_here":
-        if not available_items:
-            return []
-        return [{
-            "item_ids": [i['id'] for i in available_items[:2]],
-            "reasoning": {
-                "weather_fit": "Stub: no API key.",
-                "event_fit": "Stub: no API key.",
-                "overall_note": "Stub: no API key."
-            }
-        }]
+def generate_outfits(available_items: list, event_description: str,
+                     weather_data: dict, user_key: str = None) -> list:
+    key = _resolve_key(user_key)
+    if not key:
+        return []
 
     try:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=key)
         prompt = f"""
 You are an expert fashion stylist deeply trained in Wada Sanzo's "A Dictionary of Color Combinations".
 
@@ -107,7 +108,6 @@ Return raw JSON only — no markdown, no code fences.
 # ── Outfit image generation (Nano Banana / gemini-3.1-flash-image) ────────────
 
 def _upload_path(client, path: str):
-    """Upload a local or remote image to Gemini Files API, return file handle."""
     if path.startswith("http"):
         import urllib.request, tempfile
         suffix = os.path.splitext(path.split("?")[0])[-1] or ".jpg"
@@ -121,15 +121,16 @@ def _upload_path(client, path: str):
     return None
 
 
-def generate_outfit_image(item_paths: list, event_description: str, user_photo_path: str = None):
+def generate_outfit_image(item_paths: list, event_description: str,
+                          user_photo_path: str = None, user_key: str = None):
     """Returns a data-URI string, or None if generation fails."""
-    if not api_key or api_key == "your_gemini_api_key_here":
+    key = _resolve_key(user_key)
+    if not key:
         return None
 
     uploaded_files = []
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=key)
     try:
-        # Upload user photo first so the model treats it as the subject
         user_file = None
         if user_photo_path:
             user_file = _upload_path(client, user_photo_path)

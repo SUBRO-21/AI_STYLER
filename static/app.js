@@ -19,13 +19,19 @@ const ImageIcon   = p => <_Icon {...p}><rect x="3" y="3" width="18" height="18" 
 const UserIcon    = p => <_Icon {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></_Icon>;
 const LogOut      = p => <_Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></_Icon>;
 const Trash       = p => <_Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></_Icon>;
+const KeyIcon     = p => <_Icon {...p}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></_Icon>;
 
 // ── Supabase client (module-level, set during init) ───────────────────────────
 let _sb = null;
 let _authToken = null;
 
-const getAuthHeaders = () =>
-    _authToken ? { Authorization: `Bearer ${_authToken}` } : {};
+const getAuthHeaders = () => {
+    const headers = {};
+    if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`;
+    const geminiKey = localStorage.getItem('gemini_api_key');
+    if (geminiKey) headers['X-Gemini-Key'] = geminiKey;
+    return headers;
+};
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 const API_BASE = '/api';
@@ -624,6 +630,77 @@ function OutfitHistory({ items }) {
     );
 }
 
+// ── SettingsPage ──────────────────────────────────────────────────────────────
+function SettingsPage() {
+    const [key,   setKey]   = useState(localStorage.getItem('gemini_api_key') || '');
+    const [saved, setSaved] = useState(false);
+
+    const handleSave = () => {
+        if (key.trim()) {
+            localStorage.setItem('gemini_api_key', key.trim());
+        } else {
+            localStorage.removeItem('gemini_api_key');
+        }
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+    };
+
+    const hasSaved = !!localStorage.getItem('gemini_api_key');
+
+    return (
+        <div className="max-w-md mx-auto space-y-5">
+            <h2 className="text-xl font-semibold text-wada-navy">Settings</h2>
+
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+                <div className="flex items-center gap-2 mb-1">
+                    <KeyIcon size={18} className="text-wada-mustard" />
+                    <h3 className="font-semibold text-wada-navy">Your Gemini API Key</h3>
+                </div>
+                <p className="text-xs text-gray-400 mb-4">
+                    Stored only in your browser. The app uses your key for AI tagging and outfit generation —
+                    not the server owner's key. Get a free key at{' '}
+                    <span className="text-wada-navy font-medium">aistudio.google.com/apikey</span>
+                </p>
+
+                <div className="flex gap-2">
+                    <input
+                        type="password"
+                        placeholder="AIza..."
+                        value={key}
+                        onChange={e => { setKey(e.target.value); setSaved(false); }}
+                        className="flex-1 border p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard font-mono"
+                    />
+                    <button onClick={handleSave}
+                        className="bg-wada-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
+                        {saved ? <><CheckCircle size={15} /> Saved!</> : 'Save'}
+                    </button>
+                </div>
+
+                {hasSaved && (
+                    <div className="mt-3 flex items-center justify-between">
+                        <p className="text-xs text-wada-celadon flex items-center gap-1">
+                            <CheckCircle size={12} /> Key saved in this browser
+                        </p>
+                        <button onClick={() => { localStorage.removeItem('gemini_api_key'); setKey(''); }}
+                            className="text-xs text-red-400 hover:underline">
+                            Remove
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            <div className="bg-wada-ivory rounded-xl p-4 text-xs text-gray-500 space-y-1">
+                <p className="font-semibold text-wada-navy">Why do I need this?</p>
+                <p>Each user needs a free Gemini key so AI costs stay with you, not the app owner.</p>
+                <p>1. Go to <span className="font-medium">aistudio.google.com/apikey</span></p>
+                <p>2. Click <span className="font-medium">Create API key</span></p>
+                <p>3. Copy the key (starts with AIza...) and paste it above</p>
+            </div>
+        </div>
+    );
+}
+
+
 // ── ProfilePage ───────────────────────────────────────────────────────────────
 function ProfilePage({ session, onLogout }) {
     const [stats,   setStats]   = useState(null);
@@ -771,10 +848,11 @@ function App() {
     if (screen === 'auth') return <AuthScreen onAuth={(sess) => { setSession(sess); setScreen('app'); }} />;
 
     const TABS = [
-        { id: 'wardrobe', label: 'Wardrobe'   },
-        { id: 'plan',     label: 'Plan Outfit' },
-        { id: 'history',  label: 'History'    },
-        { id: 'profile',  label: 'Profile'    },
+        { id: 'wardrobe',  label: 'Wardrobe'   },
+        { id: 'plan',      label: 'Plan Outfit' },
+        { id: 'history',   label: 'History'     },
+        { id: 'settings',  label: 'Settings'    },
+        { id: 'profile',   label: 'Profile'     },
     ];
 
     return (
@@ -818,6 +896,8 @@ function App() {
                 )}
 
                 {tab === 'history' && <OutfitHistory items={items} />}
+
+                {tab === 'settings' && <SettingsPage />}
 
                 {tab === 'profile' && <ProfilePage session={session} onLogout={handleLogout} />}
             </div>
