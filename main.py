@@ -28,6 +28,7 @@ app.add_middleware(
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+PROFILE_PHOTO_PATH = os.path.join(UPLOAD_DIR, "_profile.jpg")
 database.init_db()
 
 P = database.P   # SQL placeholder (? for SQLite, %s for PostgreSQL)
@@ -84,10 +85,32 @@ class OutfitHistoryCreate(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.post("/api/upload")
-async def upload_image(file: UploadFile = File(...)):
+@app.post("/api/profile-photo")
+async def upload_profile_photo(file: UploadFile = File(...)):
     safe_name = os.path.basename(file.filename)
     local_path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(local_path, "wb") as buf:
+        shutil.copyfileobj(file.file, buf)
+    # Always store as _profile.jpg so there's one canonical profile photo
+    shutil.copy2(local_path, PROFILE_PHOTO_PATH)
+    stored_path = save_upload(local_path, "_profile.jpg")
+    return {"profile_photo": stored_path}
+
+
+@app.get("/api/profile-photo")
+def get_profile_photo():
+    if os.path.exists(PROFILE_PHOTO_PATH):
+        return {"profile_photo": PROFILE_PHOTO_PATH}
+    return {"profile_photo": None}
+
+
+@app.post("/api/upload")
+async def upload_image(file: UploadFile = File(...)):
+    print("%%%%%% uploding......")
+    safe_name = os.path.basename(file.filename)
+    local_path = os.path.join(UPLOAD_DIR, safe_name)
+
+    print(f"%%%%%%%% {safe_name} %%% {local_path}")
     with open(local_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
 
@@ -96,8 +119,10 @@ async def upload_image(file: UploadFile = File(...)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=422, detail=f"Image analysis failed: {e}")
-
+    print(" %%%%SAVING....................")
     image_path = save_upload(local_path, safe_name)
+
+    print("IMAGE PATH -----------------------")
     return {"image_path": image_path, "tags": tags}
 
 
@@ -225,15 +250,16 @@ def generate_outfit(req: OutfitGenerationRequest):
         return {"outfits": []}
 
     items_map = {item['id']: item for item in available_items}
+    user_photo = PROFILE_PHOTO_PATH if os.path.exists(PROFILE_PHOTO_PATH) else None
 
-    # Generate flat-lay images in parallel (Nano Banana / gemini-3.1-flash-image)
+    # Generate try-on (or flat-lay) images in parallel via Nano Banana
     def gen_image(outfit):
         paths = [
             items_map[iid]['image_path']
             for iid in outfit.get('item_ids', [])
             if iid in items_map
         ]
-        return llm_service.generate_outfit_image(paths, req.event)
+        return llm_service.generate_outfit_image(paths, req.event, user_photo_path=user_photo)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {pool.submit(gen_image, outfit): i for i, outfit in enumerate(outfits)}

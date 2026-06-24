@@ -106,7 +106,22 @@ Return raw JSON only — no markdown, no code fences.
 
 # ── Outfit image generation (Nano Banana / gemini-3.1-flash-image) ────────────
 
-def generate_outfit_image(item_paths: list, event_description: str):
+def _upload_path(client, path: str):
+    """Upload a local or remote image to Gemini Files API, return file handle."""
+    if path.startswith("http"):
+        import urllib.request, tempfile
+        suffix = os.path.splitext(path.split("?")[0])[-1] or ".jpg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            urllib.request.urlretrieve(path, tmp.name)
+            f = client.files.upload(file=tmp.name)
+        os.unlink(tmp.name)
+        return f
+    elif os.path.exists(path):
+        return client.files.upload(file=path)
+    return None
+
+
+def generate_outfit_image(item_paths: list, event_description: str, user_photo_path: str = None):
     """Returns a data-URI string, or None if generation fails."""
     if not api_key or api_key == "your_gemini_api_key_here":
         return None
@@ -114,28 +129,38 @@ def generate_outfit_image(item_paths: list, event_description: str):
     uploaded_files = []
     client = genai.Client(api_key=api_key)
     try:
+        # Upload user photo first so the model treats it as the subject
+        user_file = None
+        if user_photo_path:
+            user_file = _upload_path(client, user_photo_path)
+            if user_file:
+                uploaded_files.append(user_file)
+
         for path in item_paths:
-            if path.startswith("http"):
-                # Download remote file (Cloudinary etc.) to temp location
-                import urllib.request, tempfile
-                suffix = os.path.splitext(path.split("?")[0])[-1] or ".jpg"
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    urllib.request.urlretrieve(path, tmp.name)
-                    uploaded_files.append(client.files.upload(file=tmp.name))
-                    os.unlink(tmp.name)
-            elif os.path.exists(path):
-                uploaded_files.append(client.files.upload(file=path))
+            f = _upload_path(client, path)
+            if f:
+                uploaded_files.append(f)
 
         if not uploaded_files:
             return None
 
+        if user_file:
+            prompt = (
+                f"Virtual try-on: the first image is a photo of a person. "
+                f"The remaining images are clothing items and accessories. "
+                f"Generate a realistic image of that exact person wearing all those clothes and accessories together. "
+                f"Keep the person's face, body, and skin tone accurate. "
+                f"The outfit is styled for: {event_description}."
+            )
+        else:
+            prompt = (
+                f"Flat-lay fashion photograph: arrange these clothing items neatly on a clean white background. "
+                f"Top-down view, professional product photography style. Styled for: {event_description}."
+            )
+
         response = client.models.generate_content(
             model='gemini-3.1-flash-image',
-            contents=[
-                *uploaded_files,
-                f"Flat-lay fashion photograph: arrange these clothing items neatly on a clean white background. "
-                f"Top-down view, professional product photography style. Styled for: {event_description}"
-            ],
+            contents=[*uploaded_files, prompt],
             config=types.GenerateContentConfig(response_modalities=['IMAGE'])
         )
 

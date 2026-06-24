@@ -17,6 +17,7 @@ const Thermometer   = p => <_Icon {...p}><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 
 const Clock         = p => <_Icon {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></_Icon>;
 const Heart         = p => <_Icon {...p}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></_Icon>;
 const ImageIcon     = p => <_Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></_Icon>;
+const UserIcon      = p => <_Icon {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></_Icon>;
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 const API_BASE = (typeof window !== 'undefined' && window.API_BASE) || '/api';
@@ -44,6 +45,66 @@ const AVAIL = {
 };
 const getAvail = (item) =>
     AVAIL[item.availability] || (item.available ? AVAIL.available : AVAIL.damaged);
+
+// ── ProfilePhoto ──────────────────────────────────────────────────────────────
+function ProfilePhoto() {
+    const [photo,   setPhoto]   = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        apiFetch('/profile-photo')
+            .then(d => { if (d.profile_photo) setPhoto(d.profile_photo); })
+            .catch(() => {});
+    }, []);
+
+    const handleUpload = async (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        setLoading(true);
+        const fd = new FormData();
+        fd.append('file', f);
+        try {
+            const d = await apiFetch('/profile-photo', { method: 'POST', body: fd });
+            setPhoto(d.profile_photo + '?t=' + Date.now());
+        } catch (err) {
+            alert('Upload failed: ' + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex items-center gap-5">
+            <div className="relative shrink-0">
+                {photo
+                    ? <img src={imgSrc(photo)} alt="Your photo"
+                        className="w-20 h-20 rounded-full object-cover border-2 border-wada-mustard shadow" />
+                    : <div className="w-20 h-20 rounded-full bg-wada-ivory flex items-center justify-center border-2 border-dashed border-wada-mustard">
+                        <UserIcon size={32} className="text-wada-mustard opacity-60" />
+                      </div>
+                }
+            </div>
+            <div>
+                <p className="font-semibold text-wada-navy text-sm">
+                    {photo ? 'Your try-on photo' : 'Add your photo for virtual try-on'}
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5 mb-2">
+                    {photo
+                        ? 'Nano Banana will dress you in each outfit suggestion.'
+                        : 'Upload a full-body photo and AI will show you wearing each outfit.'}
+                </p>
+                <label className="cursor-pointer bg-wada-navy text-white text-xs px-4 py-1.5 rounded-lg flex items-center gap-1.5 w-fit hover:opacity-90">
+                    {loading
+                        ? <><Spinner size={14} className="animate-spin" /> Uploading…</>
+                        : <><Upload size={14} /> {photo ? 'Change photo' : 'Upload photo'}</>
+                    }
+                    <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                </label>
+            </div>
+        </div>
+    );
+}
+
 
 // ── UploadWizard ──────────────────────────────────────────────────────────────
 function UploadWizard({ onUploadComplete }) {
@@ -411,7 +472,7 @@ function OutfitCards({ outfits, items, currentEvent, onWore }) {
                         {outfit.outfit_image && (
                             <div className="bg-gray-50 border-b">
                                 <p className="text-xs text-gray-400 px-5 pt-3 pb-1 uppercase tracking-wide flex items-center gap-1">
-                                    <ImageIcon size={12} /> AI Flat-Lay Preview
+                                    <ImageIcon size={12} /> AI Try-On Preview
                                 </p>
                                 <img src={outfit.outfit_image} alt="AI generated flat-lay"
                                     className="w-full max-h-72 object-contain p-4" />
@@ -579,7 +640,8 @@ function App() {
                 </header>
 
                 {tab === 'wardrobe' && (
-                    <div>
+                    <div className="space-y-5">
+                        <ProfilePhoto />
                         <UploadWizard onUploadComplete={fetchItems} />
                         <WardrobeGrid items={items} onToggleAvailability={handleToggleAvailability} />
                     </div>
