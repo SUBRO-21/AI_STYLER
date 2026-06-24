@@ -1,128 +1,156 @@
 import os
 import json
+import traceback
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure Gemini
 api_key = os.getenv("GEMINI_API_KEY")
 
-def analyze_image_for_tags(file_path):
-    """
-    Analyzes an image and returns JSON tags.
-    """
+
+def _parse_json(text: str):
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return json.loads(text.strip())
+
+
+# ── Vision tagging ────────────────────────────────────────────────────────────
+
+def analyze_image_for_tags(file_path: str) -> dict:
+    """Raises on failure — caller must handle and return HTTP error."""
     if not api_key or api_key == "your_gemini_api_key_here":
-        # Stub response if no API key
         return {
-            "category": "top",
-            "color": "Mustard (Wada Sanzo)",
-            "formality": "casual",
-            "description": "A stylish mustard yellow top."
+            "category": "top", "sub_type": None,
+            "color": "Mustard (Wada Sanzo)", "formality": "casual",
+            "description": "Stub: no API key configured."
         }
 
+    client = genai.Client(api_key=api_key)
+    sample_file = client.files.upload(file=file_path)
     try:
-        client = genai.Client(api_key=api_key)
-        # Upload the file to Gemini API temporarily
-        sample_file = client.files.upload(file=file_path)
-        
-        prompt = """
-        Analyze this clothing item. Return ONLY a valid JSON object with the following keys:
-        - "category": one of [top, bottom, outerwear, shoes, accessory, dress]
-        - "color": primary color, mapped to a closest Wada Sanzo color concept (e.g., Carmine, Celadon, Mustard)
-        - "formality": one of [casual, smart-casual, formal]
-        - "description": a one-line concise description of the item
-
-        Do not wrap in markdown tags like ```json, just return the raw JSON text.
-        """
-        
         response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[sample_file, prompt]
-        )
-        
-        # Cleanup file from Gemini servers
-        client.files.delete(name=sample_file.name)
-        
-        # Parse output
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
-            
-        return json.loads(text.strip())
-        
-    except Exception as e:
-        print(f"Error in LLM vision tagging: {e}")
-        # Fallback to stub
-        return {
-            "category": "top",
-            "color": "Unknown",
-            "formality": "casual",
-            "description": "Could not analyze image."
-        }
+            contents=[sample_file, """
+Analyze this clothing or accessory item. Return ONLY a valid JSON object with these keys:
+- "category": one of [top, bottom, outerwear, shoes, accessory, dress]
+- "sub_type": if category is "accessory" then one of [belt, watch, bag, hat, sunglasses, jewellery, scarf]; otherwise null
+- "color": primary color mapped to the closest Wada Sanzo color concept (e.g. Carmine, Celadon, Mustard, Charcoal, Ivory)
+- "formality": one of [casual, smart-casual, formal]
+- "description": a single concise descriptive sentence
 
-def generate_outfits(available_items, event_description, weather_data):
-    """
-    Generates 2-3 outfit recommendations based on wardrobe, event, and weather.
-    """
+Return raw JSON only — no markdown, no code fences.
+"""]
+        )
+        return _parse_json(response.text)
+    except Exception:
+        traceback.print_exc()
+        raise   # propagate to FastAPI endpoint which returns HTTP 422
+    finally:
+        try:
+            client.files.delete(name=sample_file.name)
+        except Exception:
+            pass
+
+
+# ── Outfit generation ─────────────────────────────────────────────────────────
+
+def generate_outfits(available_items: list, event_description: str, weather_data: dict) -> list:
     if not api_key or api_key == "your_gemini_api_key_here":
-        # Stub response if no API key
         if not available_items:
             return []
-        
-        item_ids = [item['id'] for item in available_items[:2]]
-        return [
-            {
-                "item_ids": item_ids,
-                "reasoning": {
-                    "weather_fit": "Perfect for this weather.",
-                    "event_fit": "Fits the vibe perfectly.",
-                    "overall_note": "A classic pairing inspired by Wada Sanzo's contrasts."
-                }
+        return [{
+            "item_ids": [i['id'] for i in available_items[:2]],
+            "reasoning": {
+                "weather_fit": "Stub: no API key.",
+                "event_fit": "Stub: no API key.",
+                "overall_note": "Stub: no API key."
             }
-        ]
+        }]
 
     try:
         client = genai.Client(api_key=api_key)
-        items_json = json.dumps(available_items, indent=2)
-        weather_json = json.dumps(weather_data, indent=2)
-        
         prompt = f"""
-        You are an expert fashion stylist deeply trained in Wada Sanzo's "A Dictionary of Color Combinations".
-        
-        Given the following available wardrobe items, an event description, and weather forecast, generate 2 to 3 complete outfit recommendations. 
-        Each outfit must be composed entirely of items from the provided wardrobe (refer to them by their 'id').
+You are an expert fashion stylist deeply trained in Wada Sanzo's "A Dictionary of Color Combinations".
 
-        Event: {event_description}
-        Weather: {weather_json}
-        Wardrobe Items: {items_json}
+Generate 2-3 complete outfit recommendations from the wardrobe items below for the given event and weather.
+Each outfit must use only items from the wardrobe (reference by 'id'). Where appropriate, include 1 accessory
+(category = "accessory") per outfit — its sub_type is provided to help you reason about it.
 
-        Return ONLY a valid JSON array of objects. Each object must have:
-        - "item_ids": an array of integer item IDs forming the outfit
-        - "reasoning": an object with these exact keys:
-            - "weather_fit": A short sentence on why this works for the weather.
-            - "event_fit": A short sentence on why this works for the event.
-            - "overall_note": A short note on the overall aesthetic, EXPLICITLY referencing Wada Sanzo color combination principles based on the colors of the items chosen.
+Event: {event_description}
+Weather: {json.dumps(weather_data, indent=2)}
+Wardrobe: {json.dumps(available_items, indent=2)}
 
-        Do not wrap in markdown tags like ```json, just return the raw JSON text.
-        """
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        
-        # Parse output
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
-            
-        return json.loads(text.strip())
-        
+Return ONLY a valid JSON array. Each element must have:
+- "item_ids": array of integer item IDs (include the accessory ID when relevant)
+- "reasoning": object with:
+    - "weather_fit": why this works for the weather
+    - "event_fit": why this works for the event
+    - "overall_note": aesthetic note explicitly referencing Wada Sanzo color principles
+
+Return raw JSON only — no markdown, no code fences.
+"""
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+        return _parse_json(response.text)
     except Exception as e:
-        print(f"Error in LLM outfit generation: {e}")
+        print(f"Error in outfit generation: {e}")
+        traceback.print_exc()
         return []
+
+
+# ── Outfit image generation (Nano Banana / gemini-3.1-flash-image) ────────────
+
+def generate_outfit_image(item_paths: list, event_description: str):
+    """Returns a data-URI string, or None if generation fails."""
+    if not api_key or api_key == "your_gemini_api_key_here":
+        return None
+
+    uploaded_files = []
+    client = genai.Client(api_key=api_key)
+    try:
+        for path in item_paths:
+            if path.startswith("http"):
+                # Download remote file (Cloudinary etc.) to temp location
+                import urllib.request, tempfile
+                suffix = os.path.splitext(path.split("?")[0])[-1] or ".jpg"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    urllib.request.urlretrieve(path, tmp.name)
+                    uploaded_files.append(client.files.upload(file=tmp.name))
+                    os.unlink(tmp.name)
+            elif os.path.exists(path):
+                uploaded_files.append(client.files.upload(file=path))
+
+        if not uploaded_files:
+            return None
+
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-image',
+            contents=[
+                *uploaded_files,
+                f"Flat-lay fashion photograph: arrange these clothing items neatly on a clean white background. "
+                f"Top-down view, professional product photography style. Styled for: {event_description}"
+            ],
+            config=types.GenerateContentConfig(response_modalities=['IMAGE'])
+        )
+
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'inline_data') and part.inline_data:
+                return f"data:{part.inline_data.mime_type};base64,{part.inline_data.data}"
+        return None
+
+    except Exception as e:
+        print(f"Outfit image generation failed: {e}")
+        traceback.print_exc()
+        return None
+    finally:
+        for f in uploaded_files:
+            try:
+                client.files.delete(name=f.name)
+            except Exception:
+                pass
