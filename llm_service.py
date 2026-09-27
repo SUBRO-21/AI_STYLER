@@ -16,8 +16,9 @@ def _resolve_key(user_key: str = None) -> str | None:
     """Return user-supplied key if valid, else fall back to server key."""
     if user_key and user_key.strip() and user_key.strip() != PLACEHOLDER:
         return user_key.strip()
-    if _server_api_key and _server_api_key != PLACEHOLDER:
-        return _server_api_key
+    env_key = os.getenv("GEMINI_API_KEY")
+    if env_key and env_key.strip() and env_key.strip() != PLACEHOLDER:
+        return env_key.strip()
     return None
 
 

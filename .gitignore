@@ -1,16 +1,19 @@
-# Environment variables (contains API keys)
+# Environment variables (API keys)
 .env
 
-# Python
+# Local database & user uploads
+wardrobe.db
+uploads/
+
+# Python cache & virtual environments
 __pycache__/
 *.pyc
 *.pyo
-
-# Virtual environment
 venv/
+.venv/
 
-# Database
-wardrobe.db
-
-# User uploads
-uploads/
+# Logs & temp files
+*.log
+*.csv
+cache/
+.DS_Store

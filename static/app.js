@@ -1,7 +1,7 @@
 const { useState, useEffect } = React;
 
-// ── Inline SVG icons ──────────────────────────────────────────────────────────
-const _Icon = ({ size = 24, className = "", children }) => (
+// ── Icons ────────────────────────────────────────────────────────────────────
+const _Icon = ({ size = 20, className = "", children }) => (
     <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
         fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
         className={className}>{children}</svg>
@@ -17,35 +17,26 @@ const Clock       = p => <_Icon {...p}><circle cx="12" cy="12" r="10"/><polyline
 const Heart       = p => <_Icon {...p}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></_Icon>;
 const ImageIcon   = p => <_Icon {...p}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></_Icon>;
 const UserIcon    = p => <_Icon {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></_Icon>;
-const LogOut      = p => <_Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></_Icon>;
 const Trash       = p => <_Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></_Icon>;
 const KeyIcon     = p => <_Icon {...p}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></_Icon>;
+const Sparkles    = p => <_Icon {...p}><path d="M12 3l1.912 5.885L20 10.8l-4.788 3.915L16.8 21 12 17.1 7.2 21l1.588-6.285L4 10.8l6.088-1.915L12 3z"/></_Icon>;
 
-// ── Supabase client (module-level, set during init) ───────────────────────────
-let _sb = null;
-let _authToken = null;
+// ── API Helpers ──────────────────────────────────────────────────────────────
+const API_BASE = '/api';
 
-const getAuthHeaders = () => {
+const getHeaders = () => {
     const headers = {};
-    if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`;
-    const geminiKey = localStorage.getItem('gemini_api_key');
-    if (geminiKey) headers['X-Gemini-Key'] = geminiKey;
+    const key = localStorage.getItem('gemini_api_key');
+    if (key) headers['X-Gemini-Key'] = key;
     return headers;
 };
 
-// ── API helpers ───────────────────────────────────────────────────────────────
-const API_BASE = '/api';
-
 const apiFetch = async (endpoint, options = {}) => {
-    const headers = { ...options.headers, ...getAuthHeaders() };
+    const headers = { ...options.headers, ...getHeaders() };
     const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-    if (res.status === 401 && _sb) {
-        await _sb.auth.signOut();
-        return;
-    }
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || res.statusText);
+        throw new Error(body.detail || `Request failed (${res.status})`);
     }
     return res.json();
 };
@@ -53,166 +44,32 @@ const apiFetch = async (endpoint, options = {}) => {
 const imgSrc = (path) => {
     if (!path) return '';
     if (path.startsWith('http')) return path;
-    return `/${path}`;
+    const clean = path.replace(/\\/g, '/');
+    return clean.startsWith('/') ? clean : `/${clean}`;
 };
 
-// ── Availability config ───────────────────────────────────────────────────────
+// ── Availability Configurations ───────────────────────────────────────────────
 const AVAIL = {
-    available: { label: 'Available',   next: 'washing',   bg: 'bg-wada-celadon', Icon: CheckCircle },
-    washing:   { label: 'In the wash', next: 'damaged',   bg: 'bg-wada-mustard', Icon: Droplets   },
-    damaged:   { label: 'Damaged',     next: 'available', bg: 'bg-wada-carmine', Icon: AlertTri   },
+    available: { label: 'Available',   next: 'washing',   bg: 'bg-wada-celadon', text: 'text-wada-celadon', Icon: CheckCircle },
+    washing:   { label: 'In the wash', next: 'damaged',   bg: 'bg-wada-mustard', text: 'text-wada-mustard', Icon: Droplets   },
+    damaged:   { label: 'Damaged',     next: 'available', bg: 'bg-wada-carmine', text: 'text-wada-carmine', Icon: AlertTri   },
 };
-const getAvail = (item) =>
-    AVAIL[item.availability] || (item.available ? AVAIL.available : AVAIL.damaged);
+const getAvail = (item) => AVAIL[item.availability] || AVAIL.available;
 
-// ── AuthScreen ────────────────────────────────────────────────────────────────
-function AuthScreen({ onAuth }) {
-    const [mode,     setMode]    = useState('login');  // 'login' | 'signup'
-    const [email,    setEmail]   = useState('');
-    const [password, setPassword] = useState('');
-    const [loading,  setLoading] = useState(false);
-    const [error,    setError]   = useState('');
-    const [info,     setInfo]    = useState('');
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        setError(''); setInfo('');
-        setLoading(true);
-        try {
-            if (mode === 'signup') {
-                const { error } = await _sb.auth.signUp({ email, password });
-                if (error) throw error;
-                setInfo('Check your email to confirm your account, then log in.');
-                setMode('login');
-            } else {
-                const { data, error } = await _sb.auth.signInWithPassword({ email, password });
-                if (error) throw error;
-                _authToken = data.session.access_token;
-                onAuth(data.session);
-            }
-        } catch (err) {
-            setError(err.message || 'Something went wrong');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="min-h-screen bg-wada-ivory flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
-                <h1 className="text-2xl font-bold text-wada-navy mb-1">AI Stylist</h1>
-                <p className="text-sm text-gray-400 mb-6">
-                    {mode === 'login' ? 'Welcome back' : 'Create your account'}
-                </p>
-
-                {error && (
-                    <div className="bg-red-50 text-red-700 text-sm px-4 py-2 rounded-lg mb-4">{error}</div>
-                )}
-                {info && (
-                    <div className="bg-green-50 text-green-700 text-sm px-4 py-2 rounded-lg mb-4">{info}</div>
-                )}
-
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <div>
-                        <label className="text-xs font-semibold uppercase text-gray-500">Email</label>
-                        <input type="email" required value={email}
-                            onChange={e => setEmail(e.target.value)}
-                            className="mt-1 w-full border p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard" />
-                    </div>
-                    <div>
-                        <label className="text-xs font-semibold uppercase text-gray-500">Password</label>
-                        <input type="password" required minLength={6} value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            className="mt-1 w-full border p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard" />
-                    </div>
-                    <button type="submit" disabled={loading}
-                        className="w-full bg-wada-navy text-white py-2.5 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
-                        {loading && <Spinner size={16} className="animate-spin" />}
-                        {mode === 'login' ? 'Log in' : 'Create account'}
-                    </button>
-                </form>
-
-                <p className="text-center text-sm text-gray-400 mt-5">
-                    {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-                    <button onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setInfo(''); }}
-                        className="text-wada-carmine font-medium hover:underline">
-                        {mode === 'login' ? 'Sign up' : 'Log in'}
-                    </button>
-                </p>
-            </div>
-        </div>
-    );
-}
-
-// ── ProfilePhoto ──────────────────────────────────────────────────────────────
-function ProfilePhoto() {
-    const [photo,   setPhoto]   = useState(null);
-    const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        apiFetch('/profile-photo')
-            .then(d => { if (d && d.profile_photo) setPhoto(d.profile_photo); })
-            .catch(() => {});
-    }, []);
-
-    const handleUpload = async (e) => {
-        const f = e.target.files?.[0];
-        if (!f) return;
-        setLoading(true);
-        const fd = new FormData();
-        fd.append('file', f);
-        try {
-            const d = await apiFetch('/profile-photo', { method: 'POST', body: fd });
-            setPhoto(d.profile_photo + '?t=' + Date.now());
-        } catch (err) {
-            alert('Upload failed: ' + err.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex items-center gap-5">
-            <div className="shrink-0">
-                {photo
-                    ? <img src={imgSrc(photo)} alt="Your photo"
-                        className="w-20 h-20 rounded-full object-cover border-2 border-wada-mustard shadow" />
-                    : <div className="w-20 h-20 rounded-full bg-wada-ivory flex items-center justify-center border-2 border-dashed border-wada-mustard">
-                        <UserIcon size={32} className="text-wada-mustard opacity-60" />
-                      </div>
-                }
-            </div>
-            <div>
-                <p className="font-semibold text-wada-navy text-sm">
-                    {photo ? 'Your try-on photo' : 'Add your photo for virtual try-on'}
-                </p>
-                <p className="text-xs text-gray-400 mt-0.5 mb-2">
-                    {photo
-                        ? 'Nano Banana will dress you in each outfit suggestion.'
-                        : 'Upload a full-body photo and AI will show you wearing each outfit.'}
-                </p>
-                <label className="cursor-pointer bg-wada-navy text-white text-xs px-4 py-1.5 rounded-lg flex items-center gap-1.5 w-fit hover:opacity-90">
-                    {loading ? <><Spinner size={14} className="animate-spin" /> Uploading…</>
-                             : <><Upload size={14} /> {photo ? 'Change photo' : 'Upload photo'}</>}
-                    <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
-                </label>
-            </div>
-        </div>
-    );
-}
-
-// ── UploadWizard ──────────────────────────────────────────────────────────────
+// ── Upload Wizard ─────────────────────────────────────────────────────────────
 function UploadWizard({ onUploadComplete }) {
-    const [file,      setFile]      = useState(null);
-    const [preview,   setPreview]   = useState(null);
-    const [loading,   setLoading]   = useState(false);
-    const [tags,      setTags]      = useState(null);
+    const [file, setFile] = useState(null);
+    const [preview, setPreview] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [tags, setTags] = useState(null);
     const [imagePath, setImagePath] = useState(null);
 
     const onFile = (e) => {
         const f = e.target.files?.[0];
         if (!f) return;
-        setFile(f); setPreview(URL.createObjectURL(f)); setTags(null);
+        setFile(f);
+        setPreview(URL.createObjectURL(f));
+        setTags(null);
     };
 
     const handleUpload = async () => {
@@ -222,9 +79,10 @@ function UploadWizard({ onUploadComplete }) {
         fd.append('file', file);
         try {
             const data = await apiFetch('/upload', { method: 'POST', body: fd });
-            setTags(data.tags); setImagePath(data.image_path);
+            setTags(data.tags);
+            setImagePath(data.image_path);
         } catch (err) {
-            alert('Upload failed: ' + err.message);
+            alert('Upload / Tagging failed: ' + err.message + '\nTip: Make sure your Gemini API key is configured in the Settings tab.');
         } finally {
             setLoading(false);
         }
@@ -237,12 +95,18 @@ function UploadWizard({ onUploadComplete }) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    image_path: imagePath, category: tags.category,
-                    sub_type: tags.sub_type || null, color: tags.color,
-                    formality: tags.formality, description: tags.description,
+                    image_path: imagePath,
+                    category: tags.category,
+                    sub_type: tags.sub_type || null,
+                    color: tags.color,
+                    formality: tags.formality,
+                    description: tags.description,
                 }),
             });
-            setFile(null); setPreview(null); setTags(null); setImagePath(null);
+            setFile(null);
+            setPreview(null);
+            setTags(null);
+            setImagePath(null);
             onUploadComplete();
         } catch (err) {
             alert('Save failed: ' + err.message);
@@ -252,79 +116,105 @@ function UploadWizard({ onUploadComplete }) {
     };
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-semibold mb-4 text-wada-navy">Add to Wardrobe</h2>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <h2 className="text-xl font-bold mb-3 text-wada-navy flex items-center gap-2">
+                <Upload size={22} className="text-wada-mustard" /> Add Clothes to Wardrobe
+            </h2>
+            <p className="text-xs text-gray-500 mb-5">
+                Upload photos of your clothes. Gemini AI auto-tags categories, Wada Sanzo colors, and formality.
+            </p>
+
             {!tags ? (
-                <div className="flex flex-col items-center gap-4">
-                    {preview && <img src={preview} alt="preview" className="w-40 h-40 object-cover rounded-lg shadow" />}
-                    <label className="cursor-pointer bg-wada-navy text-white px-5 py-2 rounded-lg flex items-center gap-2 hover:opacity-90">
-                        <Upload size={18} /> Select Image
-                        <input type="file" accept="image/*" className="hidden" onChange={onFile} />
-                    </label>
-                    {file && !loading && (
-                        <button onClick={handleUpload}
-                            className="bg-wada-mustard text-white px-6 py-2 rounded-lg hover:opacity-90">
-                            Auto-Tag with AI
-                        </button>
+                <div className="border-2 border-dashed border-gray-200 hover:border-wada-mustard rounded-xl p-8 flex flex-col items-center justify-center gap-4 transition-colors bg-gray-50">
+                    {preview ? (
+                        <img src={preview} alt="preview" className="w-48 h-48 object-cover rounded-xl shadow-md border" />
+                    ) : (
+                        <div className="text-center">
+                            <Upload size={36} className="mx-auto text-gray-400 mb-2" />
+                            <p className="text-sm font-medium text-gray-700">Drag & drop or select clothing photo</p>
+                            <p className="text-xs text-gray-400 mt-1">PNG, JPG, WEBP stored directly in local uploads/</p>
+                        </div>
                     )}
+                    <div className="flex gap-3">
+                        <label className="cursor-pointer bg-wada-navy text-white text-sm px-5 py-2.5 rounded-lg flex items-center gap-2 hover:opacity-90 shadow-sm">
+                            <Upload size={16} /> Choose Photo
+                            <input type="file" accept="image/*" className="hidden" onChange={onFile} />
+                        </label>
+                        {file && !loading && (
+                            <button onClick={handleUpload}
+                                className="bg-wada-mustard text-white text-sm px-6 py-2.5 rounded-lg hover:opacity-95 shadow-sm font-medium flex items-center gap-2">
+                                <Sparkles size={16} /> Auto-Tag with AI
+                            </button>
+                        )}
+                    </div>
                     {loading && (
-                        <div className="flex items-center gap-2 text-wada-navy text-sm">
-                            <Spinner size={20} className="animate-spin" /> Analyzing image…
+                        <div className="flex items-center gap-2 text-wada-navy text-sm font-medium pt-2">
+                            <Spinner size={18} className="animate-spin text-wada-mustard" />
+                            Analyzing item with Gemini Vision…
                         </div>
                     )}
                 </div>
             ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <img src={preview} alt="preview" className="w-full h-56 object-cover rounded-lg shadow" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-wada-ivory bg-opacity-40 p-5 rounded-xl border border-gray-200">
+                    <img src={preview} alt="preview" className="w-full h-64 object-cover rounded-xl shadow" />
                     <div className="flex flex-col gap-3">
+                        <h3 className="text-sm font-bold text-wada-navy uppercase tracking-wider">AI Tagged Details</h3>
                         <div>
-                            <label className="text-xs font-semibold uppercase text-gray-500">Category</label>
+                            <label className="text-xs font-semibold text-gray-500 uppercase">Category</label>
                             <select value={tags.category}
                                 onChange={e => setTags({ ...tags, category: e.target.value, sub_type: null })}
-                                className="mt-1 w-full border p-2 rounded text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
+                                className="mt-1 w-full border bg-white p-2 rounded-lg text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
                                 {['top','bottom','outerwear','shoes','accessory','dress'].map(c =>
                                     <option key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}</option>)}
                             </select>
                         </div>
                         {tags.category === 'accessory' && (
                             <div>
-                                <label className="text-xs font-semibold uppercase text-gray-500">Accessory Type</label>
+                                <label className="text-xs font-semibold text-gray-500 uppercase">Accessory Type</label>
                                 <select value={tags.sub_type || ''}
                                     onChange={e => setTags({ ...tags, sub_type: e.target.value })}
-                                    className="mt-1 w-full border p-2 rounded text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
+                                    className="mt-1 w-full border bg-white p-2 rounded-lg text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
                                     <option value="">— select type —</option>
                                     {['belt','watch','bag','hat','sunglasses','jewellery','scarf'].map(t =>
                                         <option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}
                                 </select>
                             </div>
                         )}
-                        <div>
-                            <label className="text-xs font-semibold uppercase text-gray-500">Color</label>
-                            <input type="text" value={tags.color}
-                                onChange={e => setTags({ ...tags, color: e.target.value })}
-                                className="mt-1 w-full border p-2 rounded text-sm focus:ring-2 focus:ring-wada-mustard outline-none" />
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-xs font-semibold text-gray-500 uppercase">Color (Wada Concept)</label>
+                                <input type="text" value={tags.color}
+                                    onChange={e => setTags({ ...tags, color: e.target.value })}
+                                    className="mt-1 w-full border bg-white p-2 rounded-lg text-sm focus:ring-2 focus:ring-wada-mustard outline-none" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-500 uppercase">Formality</label>
+                                <select value={tags.formality}
+                                    onChange={e => setTags({ ...tags, formality: e.target.value })}
+                                    className="mt-1 w-full border bg-white p-2 rounded-lg text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
+                                    <option value="casual">Casual</option>
+                                    <option value="smart-casual">Smart-Casual</option>
+                                    <option value="formal">Formal</option>
+                                </select>
+                            </div>
                         </div>
                         <div>
-                            <label className="text-xs font-semibold uppercase text-gray-500">Formality</label>
-                            <select value={tags.formality}
-                                onChange={e => setTags({ ...tags, formality: e.target.value })}
-                                className="mt-1 w-full border p-2 rounded text-sm focus:ring-2 focus:ring-wada-mustard outline-none">
-                                <option value="casual">Casual</option>
-                                <option value="smart-casual">Smart-Casual</option>
-                                <option value="formal">Formal</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="text-xs font-semibold uppercase text-gray-500">Description</label>
+                            <label className="text-xs font-semibold text-gray-500 uppercase">Description</label>
                             <input type="text" value={tags.description}
                                 onChange={e => setTags({ ...tags, description: e.target.value })}
-                                className="mt-1 w-full border p-2 rounded text-sm focus:ring-2 focus:ring-wada-mustard outline-none" />
+                                className="mt-1 w-full border bg-white p-2 rounded-lg text-sm focus:ring-2 focus:ring-wada-mustard outline-none" />
                         </div>
-                        <button onClick={handleSave} disabled={loading}
-                            className="mt-1 bg-wada-celadon text-white py-2 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2">
-                            {loading ? <Spinner size={18} className="animate-spin" /> : <CheckCircle size={18} />}
-                            {loading ? 'Saving…' : 'Confirm & Save'}
-                        </button>
+                        <div className="flex gap-2 mt-2">
+                            <button onClick={handleSave} disabled={loading}
+                                className="flex-1 bg-wada-celadon text-white py-2.5 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm">
+                                {loading ? <Spinner size={18} className="animate-spin" /> : <CheckCircle size={18} />}
+                                Save to Local Wardrobe
+                            </button>
+                            <button onClick={() => { setTags(null); setFile(null); setPreview(null); }}
+                                className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-100">
+                                Cancel
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -332,8 +222,8 @@ function UploadWizard({ onUploadComplete }) {
     );
 }
 
-// ── WardrobeGrid ──────────────────────────────────────────────────────────────
-function WardrobeGrid({ items, onToggleAvailability }) {
+// ── Wardrobe Grid ─────────────────────────────────────────────────────────────
+function WardrobeGrid({ items, onToggleAvailability, onDeleteItem }) {
     const [filter, setFilter] = useState('all');
     const filtered    = filter === 'all' ? items : items.filter(i => i.category === filter);
     const clothing    = filtered.filter(i => i.category !== 'accessory');
@@ -343,23 +233,33 @@ function WardrobeGrid({ items, onToggleAvailability }) {
         const av = getAvail(item);
         const AvIcon = av.Icon;
         return (
-            <div className={`border rounded-xl overflow-hidden bg-white shadow-sm relative transition-opacity ${
-                item.availability && item.availability !== 'available' ? 'opacity-55' : ''
+            <div className={`border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow-md transition-all relative group ${
+                item.availability && item.availability !== 'available' ? 'opacity-60' : ''
             }`}>
                 <img src={imgSrc(item.image_path)} alt={item.description} className="w-full h-44 object-cover" />
-                <button title={`${av.label} — click to cycle`}
+                
+                {/* Availability status badge & toggle button */}
+                <button title={`${av.label} — click to change`}
                     onClick={() => onToggleAvailability(item.id, item.availability || 'available')}
-                    className={`absolute top-2 right-2 p-1.5 rounded-full text-white shadow ${av.bg}`}>
-                    <AvIcon size={14} />
+                    className={`absolute top-2 left-2 px-2 py-1 rounded-full text-xs text-white font-medium shadow flex items-center gap-1 ${av.bg}`}>
+                    <AvIcon size={12} /> {av.label}
                 </button>
+
+                {/* Delete button */}
+                <button title="Delete item"
+                    onClick={() => onDeleteItem(item.id)}
+                    className="absolute top-2 right-2 p-1.5 rounded-full bg-white bg-opacity-90 text-red-500 hover:bg-red-500 hover:text-white transition shadow opacity-80 group-hover:opacity-100">
+                    <Trash size={14} />
+                </button>
+
                 <div className="p-3">
-                    <p className="font-medium text-sm truncate text-wada-charcoal">{item.description}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                        {item.color} · {item.formality}
+                    <p className="font-semibold text-sm truncate text-wada-charcoal" title={item.description}>{item.description}</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                        <span className="font-medium text-wada-navy">{item.color}</span> · {item.formality}
                         {item.sub_type ? ` · ${item.sub_type}` : ''}
                     </p>
                     {item.last_worn && (
-                        <p className="text-xs text-wada-mustard mt-1 flex items-center gap-1">
+                        <p className="text-xs text-wada-mustard mt-1.5 flex items-center gap-1 font-medium">
                             <Clock size={11} /> Last worn {new Date(item.last_worn).toLocaleDateString()}
                         </p>
                     )}
@@ -369,28 +269,41 @@ function WardrobeGrid({ items, onToggleAvailability }) {
     }
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm mt-6 border border-gray-100">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-wada-navy">Your Wardrobe</h2>
-                <select value={filter} onChange={e => setFilter(e.target.value)}
-                    className="border p-2 rounded text-sm outline-none focus:ring-2 focus:ring-wada-mustard">
-                    <option value="all">All</option>
-                    {['top','bottom','outerwear','shoes','dress','accessory'].map(c =>
-                        <option key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}s</option>)}
-                </select>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-5 pb-3 border-b border-gray-100">
+                <div>
+                    <h2 className="text-xl font-bold text-wada-navy">Your Local Wardrobe</h2>
+                    <p className="text-xs text-gray-400 mt-0.5">{items.length} items stored in local SQLite database</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 font-medium">Filter:</span>
+                    <select value={filter} onChange={e => setFilter(e.target.value)}
+                        className="border border-gray-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard bg-white">
+                        <option value="all">All Items ({items.length})</option>
+                        {['top','bottom','outerwear','shoes','dress','accessory'].map(c =>
+                            <option key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}s</option>)}
+                    </select>
+                </div>
             </div>
-            {clothing.length === 0 && accessories.length === 0 && (
-                <p className="text-center text-gray-400 py-10">No items yet — add something above!</p>
-            )}
+
+            {items.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                    <Upload size={40} className="mx-auto mb-2 opacity-30 text-wada-navy" />
+                    <p className="font-medium text-gray-600">No clothes uploaded yet</p>
+                    <p className="text-xs text-gray-400 mt-1">Add your clothes using the upload box above to start styling.</p>
+                </div>
+            ) : null}
+
             {clothing.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                     {clothing.map(item => <ItemCard key={item.id} item={item} />)}
                 </div>
             )}
+
             {accessories.length > 0 && (
-                <div className="mt-6">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">Accessories</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="mt-8 pt-4 border-t border-gray-100">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">Accessories ({accessories.length})</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                         {accessories.map(item => <ItemCard key={item.id} item={item} />)}
                     </div>
                 </div>
@@ -399,7 +312,7 @@ function WardrobeGrid({ items, onToggleAvailability }) {
     );
 }
 
-// ── EventPlanner ──────────────────────────────────────────────────────────────
+// ── Event Planner & Outfit Generator ──────────────────────────────────────────
 function EventPlanner({ setOutfits, setCurrentEvent }) {
     const [event,   setEvent]   = useState({ description: '', date: '', location: '' });
     const [weather, setWeather] = useState(null);
@@ -424,73 +337,106 @@ function EventPlanner({ setOutfits, setCurrentEvent }) {
     };
 
     const generateOutfits = async () => {
+        if (!event.description.trim()) {
+            alert('Please specify the event or occasion description.');
+            return;
+        }
         setLoading(true);
-        setGenMsg('Styling your outfits + generating try-on images… (~30 s)');
+        setGenMsg('Styling outfits with Wada Sanzo color harmonies & creating previews…');
         try {
             setCurrentEvent({ description: event.description, date: event.date });
             const data = await apiFetch('/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ event: event.description, weather }),
+                body: JSON.stringify({ event: event.description, weather: weather || {} }),
             });
             setOutfits(data.outfits || []);
         } catch (err) {
-            alert('Generation failed: ' + err.message);
+            alert('Generation error: ' + err.message + '\nMake sure your Gemini API key is configured.');
         } finally {
-            setLoading(false); setGenMsg('');
+            setLoading(false);
+            setGenMsg('');
         }
     };
 
     return (
-        <div className="bg-white p-6 rounded-xl shadow-sm border-t-4 border-wada-mustard">
-            <h2 className="text-xl font-semibold mb-4 text-wada-navy">Plan an Event</h2>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 border-t-4 border-t-wada-mustard">
+            <h2 className="text-xl font-bold mb-2 text-wada-navy flex items-center gap-2">
+                <Sparkles size={22} className="text-wada-mustard" /> Plan Outfit for an Event
+            </h2>
+            <p className="text-xs text-gray-500 mb-5">
+                Enter your event details and location. The AI checks real weather forecasts to select appropriate colors, layers, and formality.
+            </p>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                <input type="text" placeholder="Event (e.g. Rooftop dinner)"
-                    className="border p-2 rounded text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
-                    value={event.description}
-                    onChange={e => setEvent({ ...event, description: e.target.value })} />
-                <input type="date"
-                    className="border p-2 rounded text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
-                    value={event.date}
-                    onChange={e => setEvent({ ...event, date: e.target.value })} />
-                <div className="flex gap-2">
-                    <input type="text" placeholder="City (e.g. Bangalore)"
-                        className="border p-2 rounded flex-1 text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
-                        value={event.location}
-                        onChange={e => setEvent({ ...event, location: e.target.value })}
-                        onKeyDown={e => e.key === 'Enter' && fetchWeather()} />
-                    <button onClick={fetchWeather} disabled={loading}
-                        className="bg-wada-navy text-white px-3 rounded hover:opacity-90 disabled:opacity-50">
-                        <Search size={18} />
-                    </button>
+                <div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Occasion / Event</label>
+                    <input type="text" placeholder="e.g. Dinner date, Office meeting, Sunday brunch"
+                        className="mt-1 w-full border border-gray-200 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
+                        value={event.description}
+                        onChange={e => setEvent({ ...event, description: e.target.value })} />
+                </div>
+                <div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Date (Optional)</label>
+                    <input type="date"
+                        className="mt-1 w-full border border-gray-200 p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
+                        value={event.date}
+                        onChange={e => setEvent({ ...event, date: e.target.value })} />
+                </div>
+                <div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">City / Location</label>
+                    <div className="flex gap-2 mt-1">
+                        <input type="text" placeholder="e.g. London, Mumbai, New York"
+                            className="border border-gray-200 p-2.5 rounded-lg flex-1 text-sm outline-none focus:ring-2 focus:ring-wada-mustard"
+                            value={event.location}
+                            onChange={e => setEvent({ ...event, location: e.target.value })}
+                            onKeyDown={e => e.key === 'Enter' && fetchWeather()} />
+                        <button onClick={fetchWeather} disabled={loading || !event.location}
+                            title="Get Weather"
+                            className="bg-wada-navy text-white px-3.5 rounded-lg hover:opacity-90 disabled:opacity-50">
+                            <Search size={16} />
+                        </button>
+                    </div>
                 </div>
             </div>
+
             {weather && (
-                <div className="bg-wada-ivory rounded-lg p-4 flex items-center justify-between">
+                <div className="bg-wada-ivory bg-opacity-60 rounded-xl p-4 mb-4 flex items-center justify-between border border-amber-100">
                     <div className="flex items-center gap-3">
-                        <Thermometer className="text-wada-carmine" size={22} />
+                        <Thermometer className="text-wada-carmine" size={24} />
                         <div>
-                            <p className="font-medium text-wada-navy text-sm">
-                                Weather {event.date ? `on ${event.date}` : 'today'}
+                            <p className="font-semibold text-wada-navy text-sm">
+                                Weather in {event.location} {event.date ? `on ${event.date}` : 'today'}
                             </p>
                             <p className="text-xs text-gray-600">
-                                {weather.temp_min}°C – {weather.temp_max}°C · Rain: {weather.precip_chance}%
+                                Temperature: {weather.temp_min}°C to {weather.temp_max}°C · Rain chance: {weather.precip_chance}%
                             </p>
                         </div>
                     </div>
-                    <button onClick={generateOutfits} disabled={loading || !event.description}
-                        className="bg-wada-mustard text-white px-5 py-2 rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
-                        {loading && <Spinner size={16} className="animate-spin" />}
-                        Style Me
-                    </button>
+                    <span className="text-xs bg-white border border-gray-200 px-2.5 py-1 rounded-full text-wada-navy font-medium">
+                        Weather integrated
+                    </span>
                 </div>
             )}
-            {genMsg && <p className="text-center text-xs text-gray-400 mt-3 animate-pulse">{genMsg}</p>}
+
+            <div className="flex justify-end pt-2">
+                <button onClick={generateOutfits} disabled={loading || !event.description.trim()}
+                    className="bg-wada-mustard text-white px-7 py-3 rounded-xl text-sm font-semibold hover:opacity-95 disabled:opacity-50 flex items-center gap-2 shadow-sm transition">
+                    {loading ? <Spinner size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                    Generate Outfit Recommendations
+                </button>
+            </div>
+
+            {genMsg && (
+                <div className="mt-4 p-3 bg-blue-50 text-blue-800 rounded-lg text-xs text-center font-medium animate-pulse">
+                    {genMsg}
+                </div>
+            )}
         </div>
     );
 }
 
-// ── OutfitCards ───────────────────────────────────────────────────────────────
+// ── Outfit Cards ──────────────────────────────────────────────────────────────
 function OutfitCards({ outfits, items, currentEvent, onWore }) {
     if (!outfits || outfits.length === 0) return null;
 
@@ -503,7 +449,8 @@ function OutfitCards({ outfits, items, currentEvent, onWore }) {
                 weather_fit: outfit.reasoning?.weather_fit || '',
                 event_fit: outfit.reasoning?.event_fit || '',
                 overall_note: outfit.reasoning?.overall_note || '',
-                feedback_type: type, feedback_text: text,
+                feedback_type: type,
+                feedback_text: text,
             }),
         }).catch(console.error);
 
@@ -514,13 +461,13 @@ function OutfitCards({ outfits, items, currentEvent, onWore }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     item_ids: JSON.stringify(outfit.item_ids),
-                    event_description: currentEvent?.description || '',
+                    event_description: currentEvent?.description || 'Styled Outfit',
                     date: currentEvent?.date || new Date().toISOString().split('T')[0],
                 }),
             });
             await postFeedback(outfit, 'wore');
             if (onWore) onWore();
-            alert('Logged to outfit history!');
+            alert('Logged to your outfit history!');
         } catch (err) {
             alert('Could not save: ' + err.message);
         }
@@ -528,50 +475,62 @@ function OutfitCards({ outfits, items, currentEvent, onWore }) {
 
     return (
         <div className="mt-8 space-y-6">
-            <h2 className="text-xl font-semibold text-wada-navy">Suggested Outfits</h2>
+            <h2 className="text-xl font-bold text-wada-navy">Recommended Outfits</h2>
             {outfits.map((outfit, idx) => {
                 const outfitItems = (outfit.item_ids || [])
                     .map(id => items.find(i => i.id === id)).filter(Boolean);
                 return (
-                    <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div key={idx} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                         {outfit.outfit_image && (
-                            <div className="bg-gray-50 border-b">
-                                <p className="text-xs text-gray-400 px-5 pt-3 pb-1 uppercase tracking-wide flex items-center gap-1">
-                                    <ImageIcon size={12} /> AI Try-On Preview
+                            <div className="bg-gray-50 border-b p-4">
+                                <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide font-semibold flex items-center gap-1.5">
+                                    <ImageIcon size={14} className="text-wada-navy" /> AI Visual Try-On / Flat-Lay
                                 </p>
                                 <img src={outfit.outfit_image} alt="AI generated try-on"
-                                    className="w-full max-h-80 object-contain p-4" />
+                                    className="w-full max-h-96 object-contain rounded-xl bg-white p-2 shadow-inner" />
                             </div>
                         )}
-                        <div className="p-5">
-                            <div className="flex gap-3 overflow-x-auto pb-2 mb-4">
+                        <div className="p-6">
+                            <h3 className="text-sm font-bold text-wada-navy uppercase tracking-wider mb-3">
+                                Items in this combination ({outfitItems.length})
+                            </h3>
+                            <div className="flex gap-4 overflow-x-auto pb-3 mb-5">
                                 {outfitItems.map(item => (
-                                    <div key={item.id} className="min-w-[96px]">
-                                        <img src={imgSrc(item.image_path)} className="w-24 h-28 object-cover rounded-lg border" />
-                                        <p className="text-xs text-center mt-1 truncate w-24">{item.description}</p>
+                                    <div key={item.id} className="min-w-[110px] w-[110px] border border-gray-100 rounded-xl p-2 bg-gray-50">
+                                        <img src={imgSrc(item.image_path)} className="w-full h-28 object-cover rounded-lg" />
+                                        <p className="text-xs font-semibold text-wada-charcoal mt-1.5 truncate">{item.description}</p>
+                                        <p className="text-[11px] text-gray-400 capitalize">{item.category}</p>
                                     </div>
                                 ))}
                             </div>
-                            <div className="bg-wada-ivory rounded-lg p-4 text-sm mb-4 space-y-1.5">
-                                <p><span className="font-semibold text-wada-navy">Weather fit: </span>{outfit.reasoning?.weather_fit}</p>
-                                <p><span className="font-semibold text-wada-navy">Event fit: </span>{outfit.reasoning?.event_fit}</p>
-                                <p><span className="font-semibold text-wada-carmine">Stylist note: </span>{outfit.reasoning?.overall_note}</p>
+
+                            <div className="bg-wada-ivory bg-opacity-70 rounded-xl p-4 text-sm mb-5 space-y-2 border border-amber-100">
+                                {outfit.reasoning?.weather_fit && (
+                                    <p><span className="font-semibold text-wada-navy">Weather match: </span>{outfit.reasoning.weather_fit}</p>
+                                )}
+                                {outfit.reasoning?.event_fit && (
+                                    <p><span className="font-semibold text-wada-navy">Occasion match: </span>{outfit.reasoning.event_fit}</p>
+                                )}
+                                {outfit.reasoning?.overall_note && (
+                                    <p><span className="font-semibold text-wada-carmine">Stylist color harmony: </span>{outfit.reasoning.overall_note}</p>
+                                )}
                             </div>
-                            <div className="flex gap-2 flex-wrap">
+
+                            <div className="flex gap-3 flex-wrap">
                                 <button onClick={() => handleWore(outfit)}
-                                    className="bg-wada-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
-                                    <Heart size={15} /> I wore this
+                                    className="bg-wada-navy text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:opacity-90 flex items-center gap-2 shadow-sm">
+                                    <Heart size={16} /> I Wore This
                                 </button>
-                                <button onClick={() => postFeedback(outfit, 'wear')}
-                                    className="bg-wada-celadon text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90">
-                                    I'd wear this
+                                <button onClick={() => postFeedback(outfit, 'like')}
+                                    className="bg-wada-celadon text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:opacity-90">
+                                    Love This Style
                                 </button>
                                 <button onClick={() => {
-                                        const r = prompt("What was off? (optional)");
-                                        postFeedback(outfit, 'not_for_me', r || '');
+                                        const note = prompt("What was off with this outfit? (optional)");
+                                        postFeedback(outfit, 'not_for_me', note || '');
                                     }}
-                                    className="bg-gray-100 text-wada-charcoal px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-200">
-                                    Not for me
+                                    className="bg-gray-100 text-gray-700 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-200">
+                                    Not For Me
                                 </button>
                             </div>
                         </div>
@@ -582,46 +541,64 @@ function OutfitCards({ outfits, items, currentEvent, onWore }) {
     );
 }
 
-// ── OutfitHistory ─────────────────────────────────────────────────────────────
+// ── Outfit History ────────────────────────────────────────────────────────────
 function OutfitHistory({ items }) {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        apiFetch('/outfit-history').then(setHistory).catch(console.error).finally(() => setLoading(false));
-    }, []);
+    const loadHistory = () => {
+        setLoading(true);
+        apiFetch('/outfit-history')
+            .then(setHistory)
+            .catch(console.error)
+            .finally(() => setLoading(false));
+    };
 
-    if (loading) return <div className="flex justify-center py-16 text-gray-300"><Spinner size={36} className="animate-spin" /></div>;
+    useEffect(() => { loadHistory(); }, []);
+
+    if (loading) return (
+        <div className="flex justify-center py-16 text-wada-mustard">
+            <Spinner size={36} className="animate-spin" />
+        </div>
+    );
+
     if (history.length === 0) return (
-        <div className="text-center py-16 text-gray-400">
-            <Clock size={40} className="mx-auto mb-3 opacity-30" />
-            <p>No outfit history yet.</p>
-            <p className="text-sm mt-1">Generate outfits and tap "I wore this".</p>
+        <div className="bg-white rounded-2xl p-12 text-center text-gray-400 border border-gray-100">
+            <Clock size={44} className="mx-auto mb-3 opacity-30 text-wada-navy" />
+            <h3 className="font-bold text-gray-700 text-lg">No outfit history yet</h3>
+            <p className="text-sm mt-1">Generate an outfit and click "I Wore This" to log it to your local history.</p>
         </div>
     );
 
     return (
-        <div className="space-y-5">
-            <h2 className="text-xl font-semibold text-wada-navy">Outfit History</h2>
+        <div className="space-y-4">
+            <div className="flex justify-between items-center mb-2">
+                <h2 className="text-xl font-bold text-wada-navy">Outfit History ({history.length})</h2>
+            </div>
             {history.map(entry => {
                 const ids = (() => { try { return JSON.parse(entry.item_ids); } catch { return []; } })();
                 const entryItems = ids.map(id => items.find(i => i.id === id)).filter(Boolean);
                 return (
-                    <div key={entry.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-                        <p className="font-semibold text-wada-navy">{entry.event_description || 'Outfit'}</p>
-                        <p className="text-xs text-gray-400 mt-0.5 mb-3 flex items-center gap-1">
-                            <Clock size={11} /> Worn {entry.date} · Logged {new Date(entry.created_at).toLocaleDateString()}
-                        </p>
-                        <div className="flex gap-3 overflow-x-auto">
-                            {entryItems.length > 0
-                                ? entryItems.map(item => (
-                                    <div key={item.id} className="min-w-[72px]">
-                                        <img src={imgSrc(item.image_path)} className="w-[72px] h-[88px] object-cover rounded-lg border" />
-                                        <p className="text-xs text-center mt-1 truncate w-[72px]">{item.description}</p>
+                    <div key={entry.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+                        <div className="flex justify-between items-start mb-3">
+                            <div>
+                                <h3 className="font-bold text-wada-navy text-base">{entry.event_description || 'Outfit'}</h3>
+                                <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+                                    <Clock size={12} /> Worn on: <span className="font-medium text-gray-600">{entry.date}</span> · Logged: {new Date(entry.created_at).toLocaleDateString()}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex gap-3 overflow-x-auto pb-2">
+                            {entryItems.length > 0 ? (
+                                entryItems.map(item => (
+                                    <div key={item.id} className="min-w-[80px] w-[80px] bg-gray-50 p-1.5 rounded-lg border border-gray-100">
+                                        <img src={imgSrc(item.image_path)} className="w-full h-24 object-cover rounded-md" />
+                                        <p className="text-[11px] font-medium text-center mt-1 truncate">{item.description}</p>
                                     </div>
                                 ))
-                                : <p className="text-sm text-gray-400 italic">Items no longer in wardrobe.</p>
-                            }
+                            ) : (
+                                <p className="text-xs text-gray-400 italic">Items were deleted from wardrobe.</p>
+                            )}
                         </div>
                     </div>
                 );
@@ -630,9 +607,102 @@ function OutfitHistory({ items }) {
     );
 }
 
-// ── SettingsPage ──────────────────────────────────────────────────────────────
-function SettingsPage() {
-    const [key,   setKey]   = useState(localStorage.getItem('gemini_api_key') || '');
+// ── Try-On Profile & Stats ────────────────────────────────────────────────────
+function ProfileSection() {
+    const [photo,   setPhoto]   = useState(null);
+    const [stats,   setStats]   = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        apiFetch('/profile-photo')
+            .then(d => { if (d && d.profile_photo) setPhoto(d.profile_photo); })
+            .catch(() => {});
+        apiFetch('/profile-stats')
+            .then(setStats)
+            .catch(() => {});
+    }, []);
+
+    const handleUpload = async (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        setLoading(true);
+        const fd = new FormData();
+        fd.append('file', f);
+        try {
+            const d = await apiFetch('/profile-photo', { method: 'POST', body: fd });
+            setPhoto(d.profile_photo + '?t=' + Date.now());
+        } catch (err) {
+            alert('Upload failed: ' + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDeletePhoto = async () => {
+        if (!confirm('Remove try-on photo?')) return;
+        try {
+            await apiFetch('/profile-photo', { method: 'DELETE' });
+            setPhoto(null);
+        } catch (err) {
+            alert(err.message);
+        }
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-6">
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+                <div className="shrink-0 relative">
+                    {photo ? (
+                        <div className="relative group">
+                            <img src={imgSrc(photo)} alt="Try-on photo"
+                                className="w-24 h-24 rounded-2xl object-cover border-2 border-wada-mustard shadow-md" />
+                            <button onClick={handleDeletePhoto}
+                                title="Remove photo"
+                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow hover:bg-red-600 transition">
+                                <Trash size={12} />
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="w-24 h-24 rounded-2xl bg-wada-ivory flex items-center justify-center border-2 border-dashed border-wada-mustard text-wada-mustard">
+                            <UserIcon size={36} className="opacity-70" />
+                        </div>
+                    )}
+                </div>
+                <div className="flex-1 text-center sm:text-left">
+                    <h3 className="font-bold text-wada-navy text-base">
+                        {photo ? 'Your Virtual Try-On Photo' : 'Add Your Photo for Virtual Try-On'}
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-1 mb-3 max-w-lg">
+                        {photo
+                            ? 'Gemini models generate realistic previews of you wearing suggested outfits.'
+                            : 'Upload a standing portrait photo, and the AI will visualize you wearing your clothes.'}
+                    </p>
+                    <label className="cursor-pointer bg-wada-navy text-white text-xs px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:opacity-90 transition shadow-sm">
+                        {loading ? <Spinner size={14} className="animate-spin" /> : <Upload size={14} />}
+                        {photo ? 'Change Try-On Photo' : 'Upload Try-On Photo'}
+                        <input type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                    </label>
+                </div>
+                {stats && (
+                    <div className="flex gap-3 pt-2 sm:pt-0">
+                        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-center min-w-[90px]">
+                            <p className="text-xl font-black text-wada-navy">{stats.item_count}</p>
+                            <p className="text-[11px] text-gray-500 uppercase tracking-wide font-medium">Clothes</p>
+                        </div>
+                        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-center min-w-[90px]">
+                            <p className="text-xl font-black text-wada-mustard">{stats.outfit_count}</p>
+                            <p className="text-[11px] text-gray-500 uppercase tracking-wide font-medium">Worn</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ── Settings Page ─────────────────────────────────────────────────────────────
+function SettingsPage({ onClearAll }) {
+    const [key, setKey] = useState(localStorage.getItem('gemini_api_key') || '');
     const [saved, setSaved] = useState(false);
 
     const handleSave = () => {
@@ -642,181 +712,98 @@ function SettingsPage() {
             localStorage.removeItem('gemini_api_key');
         }
         setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        setTimeout(() => setSaved(false), 2500);
     };
 
-    const hasSaved = !!localStorage.getItem('gemini_api_key');
+    const hasSavedKey = !!localStorage.getItem('gemini_api_key');
 
     return (
-        <div className="max-w-md mx-auto space-y-5">
-            <h2 className="text-xl font-semibold text-wada-navy">Settings</h2>
+        <div className="max-w-xl mx-auto space-y-6">
+            <h2 className="text-xl font-bold text-wada-navy">Settings & API Key</h2>
 
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-                <div className="flex items-center gap-2 mb-1">
-                    <KeyIcon size={18} className="text-wada-mustard" />
-                    <h3 className="font-semibold text-wada-navy">Your Gemini API Key</h3>
+            {/* Gemini API Key Box */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+                <div className="flex items-center gap-2 mb-2">
+                    <KeyIcon size={20} className="text-wada-mustard" />
+                    <h3 className="font-bold text-wada-navy">Gemini API Key</h3>
                 </div>
-                <p className="text-xs text-gray-400 mb-4">
-                    Stored only in your browser. The app uses your key for AI tagging and outfit generation —
-                    not the server owner's key. Get a free key at{' '}
-                    <span className="text-wada-navy font-medium">aistudio.google.com/apikey</span>
+                <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+                    Your key is stored safely on your machine. You can enter it here or set it in your local <code className="bg-gray-100 px-1 py-0.5 rounded text-wada-navy font-mono">.env</code> file.
                 </p>
 
                 <div className="flex gap-2">
                     <input
                         type="password"
-                        placeholder="AIza..."
+                        placeholder="AIzaSy..."
                         value={key}
                         onChange={e => { setKey(e.target.value); setSaved(false); }}
-                        className="flex-1 border p-2.5 rounded-lg text-sm outline-none focus:ring-2 focus:ring-wada-mustard font-mono"
+                        className="flex-1 border border-gray-200 p-2.5 rounded-xl text-sm outline-none focus:ring-2 focus:ring-wada-mustard font-mono"
                     />
                     <button onClick={handleSave}
-                        className="bg-wada-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 flex items-center gap-1.5">
-                        {saved ? <><CheckCircle size={15} /> Saved!</> : 'Save'}
+                        className="bg-wada-navy text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:opacity-90 flex items-center gap-2 shadow-sm">
+                        {saved ? <><CheckCircle size={16} /> Saved!</> : 'Save Key'}
                     </button>
                 </div>
 
-                {hasSaved && (
+                {hasSavedKey && (
                     <div className="mt-3 flex items-center justify-between">
-                        <p className="text-xs text-wada-celadon flex items-center gap-1">
-                            <CheckCircle size={12} /> Key saved in this browser
+                        <p className="text-xs text-wada-celadon font-medium flex items-center gap-1.5">
+                            <CheckCircle size={14} /> Key saved in local browser storage
                         </p>
                         <button onClick={() => { localStorage.removeItem('gemini_api_key'); setKey(''); }}
-                            className="text-xs text-red-400 hover:underline">
-                            Remove
+                            className="text-xs text-red-500 hover:underline">
+                            Remove Key
                         </button>
                     </div>
                 )}
             </div>
 
-            <div className="bg-wada-ivory rounded-xl p-4 text-xs text-gray-500 space-y-1">
-                <p className="font-semibold text-wada-navy">Why do I need this?</p>
-                <p>Each user needs a free Gemini key so AI costs stay with you, not the app owner.</p>
-                <p>1. Go to <span className="font-medium">aistudio.google.com/apikey</span></p>
-                <p>2. Click <span className="font-medium">Create API key</span></p>
-                <p>3. Copy the key (starts with AIza...) and paste it above</p>
+            {/* Help getting the key */}
+            <div className="bg-wada-ivory bg-opacity-70 rounded-2xl p-5 text-xs text-gray-600 space-y-2 border border-amber-100">
+                <p className="font-bold text-wada-navy text-sm">How to get a free Google Gemini API key:</p>
+                <ol className="list-decimal pl-4 space-y-1">
+                    <li>Visit <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-wada-navy font-semibold underline">Google AI Studio (aistudio.google.com/apikey)</a>.</li>
+                    <li>Click <strong>Create API Key</strong>.</li>
+                    <li>Paste your key above or in your local <code className="bg-white px-1.5 py-0.5 rounded border text-wada-charcoal font-mono">.env</code> file.</li>
+                </ol>
+            </div>
+
+            {/* Local Storage Information */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-3">
+                <h3 className="font-bold text-wada-navy text-sm">Local Storage & Privacy</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                    All your uploaded clothes images are saved in your local <code className="bg-gray-100 px-1 py-0.5 rounded text-wada-navy font-mono">uploads/</code> directory. All tags, availability, and outfit logs are saved in <code className="bg-gray-100 px-1 py-0.5 rounded text-wada-navy font-mono">wardrobe.db</code> (SQLite). Nothing is sent to third-party databases.
+                </p>
+                <div className="pt-2">
+                    <button onClick={onClearAll}
+                        className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 px-4 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition">
+                        <Trash size={14} /> Reset & Clear All Local Wardrobe Data
+                    </button>
+                </div>
             </div>
         </div>
     );
 }
 
+// ── Main App Component ────────────────────────────────────────────────────────
+function App() {
+    const [items, setItems] = useState([]);
+    const [outfits, setOutfits] = useState([]);
+    const [currentEvent, setCurrentEvent] = useState({ description: '', date: '' });
+    const [tab, setTab] = useState('wardrobe'); // 'wardrobe' | 'plan' | 'history' | 'settings'
 
-// ── ProfilePage ───────────────────────────────────────────────────────────────
-function ProfilePage({ session, onLogout }) {
-    const [stats,   setStats]   = useState(null);
-    const [loading, setLoading] = useState(false);
-    const email = session?.user?.email || 'Local dev user';
-
-    useEffect(() => {
-        apiFetch('/profile-stats').then(setStats).catch(console.error);
-    }, []);
-
-    const handleDelete = async () => {
-        if (!confirm('Delete ALL your data and account? This cannot be undone.')) return;
-        setLoading(true);
+    const fetchItems = async () => {
         try {
-            await apiFetch('/account', { method: 'DELETE' });
-            if (_sb) await _sb.auth.signOut();
-            onLogout();
+            const data = await apiFetch('/items');
+            setItems(data);
         } catch (err) {
-            alert('Error: ' + err.message);
-        } finally {
-            setLoading(false);
+            console.error('Failed to load items:', err);
         }
     };
 
-    return (
-        <div className="max-w-md mx-auto space-y-5">
-            <h2 className="text-xl font-semibold text-wada-navy">Profile</h2>
-
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-wada-navy flex items-center justify-center text-white font-bold text-lg">
-                        {email[0].toUpperCase()}
-                    </div>
-                    <div>
-                        <p className="font-medium text-wada-charcoal">{email}</p>
-                        <p className="text-xs text-gray-400">Signed in</p>
-                    </div>
-                </div>
-
-                {stats && (
-                    <div className="grid grid-cols-2 gap-3 pt-2">
-                        <div className="bg-wada-ivory rounded-lg p-4 text-center">
-                            <p className="text-2xl font-bold text-wada-navy">{stats.item_count}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">Items in wardrobe</p>
-                        </div>
-                        <div className="bg-wada-ivory rounded-lg p-4 text-center">
-                            <p className="text-2xl font-bold text-wada-navy">{stats.outfit_count}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">Outfits logged</p>
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {session && (
-                <button onClick={onLogout}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-gray-200 text-wada-charcoal px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50">
-                    <LogOut size={16} /> Log out
-                </button>
-            )}
-
-            <button onClick={handleDelete} disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50">
-                {loading ? <Spinner size={15} className="animate-spin" /> : <Trash size={15} />}
-                Delete my account and all data
-            </button>
-        </div>
-    );
-}
-
-// ── App ───────────────────────────────────────────────────────────────────────
-function App() {
-    const [screen,       setScreen]       = useState('loading'); // 'loading'|'auth'|'app'
-    const [session,      setSession]      = useState(null);
-    const [items,        setItems]        = useState([]);
-    const [outfits,      setOutfits]      = useState([]);
-    const [currentEvent, setCurrentEvent] = useState({ description: '', date: '' });
-    const [tab,          setTab]          = useState('wardrobe');
-
-    // ── Init: fetch config, set up Supabase if configured ──────────────────────
     useEffect(() => {
-        (async () => {
-            try {
-                const cfg = await fetch('/api/client-config').then(r => r.json());
-                if (cfg.auth_enabled && cfg.supabase_url && window.supabase) {
-                    _sb = window.supabase.createClient(cfg.supabase_url, cfg.supabase_anon_key);
-                    const { data } = await _sb.auth.getSession();
-                    if (data.session) {
-                        _authToken = data.session.access_token;
-                        setSession(data.session);
-                        setScreen('app');
-                    } else {
-                        setScreen('auth');
-                    }
-                    _sb.auth.onAuthStateChange((_event, sess) => {
-                        _authToken = sess?.access_token || null;
-                        setSession(sess);
-                        setScreen(sess ? 'app' : 'auth');
-                    });
-                } else {
-                    // Dev mode — no auth required
-                    setScreen('app');
-                }
-            } catch (e) {
-                console.error(e);
-                setScreen('app');
-            }
-        })();
+        fetchItems();
     }, []);
-
-    const fetchItems = async () => {
-        try { setItems(await apiFetch('/items')); } catch (err) { console.error(err); }
-    };
-
-    useEffect(() => {
-        if (screen === 'app') fetchItems();
-    }, [screen]);
 
     const handleToggleAvailability = async (id, current) => {
         const next = AVAIL[current]?.next || 'available';
@@ -832,74 +819,101 @@ function App() {
         }
     };
 
-    const handleLogout = async () => {
-        if (_sb) await _sb.auth.signOut();
-        _authToken = null;
-        setSession(null);
-        setScreen('auth');
+    const handleDeleteItem = async (id) => {
+        if (!confirm('Are you sure you want to delete this item?')) return;
+        try {
+            await apiFetch(`/items/${id}`, { method: 'DELETE' });
+            fetchItems();
+        } catch (err) {
+            alert('Delete failed: ' + err.message);
+        }
     };
 
-    if (screen === 'loading') return (
-        <div className="min-h-screen bg-wada-ivory flex items-center justify-center">
-            <Spinner size={40} className="animate-spin text-wada-mustard" />
-        </div>
-    );
-
-    if (screen === 'auth') return <AuthScreen onAuth={(sess) => { setSession(sess); setScreen('app'); }} />;
+    const handleClearAll = async () => {
+        if (!confirm('WARNING: This will delete ALL clothing photos, wardrobe items, and outfit history from your local machine. Are you sure?')) return;
+        try {
+            await apiFetch('/clear-data', { method: 'DELETE' });
+            fetchItems();
+            setOutfits([]);
+            alert('Local data reset successfully.');
+        } catch (err) {
+            alert('Clear failed: ' + err.message);
+        }
+    };
 
     const TABS = [
-        { id: 'wardrobe',  label: 'Wardrobe'   },
-        { id: 'plan',      label: 'Plan Outfit' },
-        { id: 'history',   label: 'History'     },
-        { id: 'settings',  label: 'Settings'    },
-        { id: 'profile',   label: 'Profile'     },
+        { id: 'wardrobe', label: 'My Wardrobe',  icon: Upload },
+        { id: 'plan',     label: 'Plan Outfits', icon: Sparkles },
+        { id: 'history',  label: 'History',      icon: Clock },
+        { id: 'settings', label: 'Settings',     icon: KeyIcon },
     ];
 
     return (
-        <div className="min-h-screen bg-gray-50 font-sans">
+        <div className="min-h-screen bg-gray-50 font-sans pb-12">
             <div className="max-w-5xl mx-auto px-4 py-6">
-                <header className="flex justify-between items-center mb-8 pb-4 border-b border-wada-mustard border-opacity-40">
-                    <h1 className="text-3xl font-bold text-wada-navy tracking-tight">AI Stylist</h1>
-                    <div className="flex items-center gap-4">
-                        {session?.user?.email && (
-                            <span className="text-xs text-gray-400 hidden md:block">{session.user.email}</span>
-                        )}
-                        <nav className="flex gap-5">
-                            {TABS.map(({ id, label }) => (
-                                <button key={id} onClick={() => setTab(id)}
-                                    className={`text-sm font-medium pb-1 border-b-2 transition-colors ${
-                                        tab === id
-                                            ? 'border-wada-carmine text-wada-carmine'
-                                            : 'border-transparent text-gray-500 hover:text-wada-navy'
-                                    }`}>
-                                    {label}
-                                </button>
-                            ))}
-                        </nav>
+                {/* Header */}
+                <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 pb-4 border-b border-wada-mustard border-opacity-30">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h1 className="text-3xl font-extrabold text-wada-navy tracking-tight">AI Stylist</h1>
+                            <span className="bg-wada-celadon bg-opacity-20 text-wada-celadon text-[11px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                Local
+                            </span>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">Smart wardrobe stylist powered by Gemini & Wada Sanzo color principles</p>
                     </div>
+
+                    {/* Navigation */}
+                    <nav className="flex gap-2 bg-white p-1 rounded-xl shadow-sm border border-gray-100">
+                        {TABS.map(({ id, label, icon: TabIcon }) => (
+                            <button key={id} onClick={() => setTab(id)}
+                                className={`flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg transition-all ${
+                                    tab === id
+                                        ? 'bg-wada-navy text-white shadow-sm'
+                                        : 'text-gray-600 hover:text-wada-navy hover:bg-gray-50'
+                                }`}>
+                                <TabIcon size={14} />
+                                {label}
+                            </button>
+                        ))}
+                    </nav>
                 </header>
 
+                {/* Tab: Wardrobe */}
                 {tab === 'wardrobe' && (
                     <div className="space-y-6">
-                        <ProfilePhoto />
+                        <ProfileSection />
                         <UploadWizard onUploadComplete={fetchItems} />
-                        <WardrobeGrid items={items} onToggleAvailability={handleToggleAvailability} />
+                        <WardrobeGrid
+                            items={items}
+                            onToggleAvailability={handleToggleAvailability}
+                            onDeleteItem={handleDeleteItem}
+                        />
                     </div>
                 )}
 
+                {/* Tab: Plan Outfits */}
                 {tab === 'plan' && (
-                    <div>
+                    <div className="space-y-6">
                         <EventPlanner setOutfits={setOutfits} setCurrentEvent={setCurrentEvent} />
-                        <OutfitCards outfits={outfits} items={items}
-                            currentEvent={currentEvent} onWore={fetchItems} />
+                        <OutfitCards
+                            outfits={outfits}
+                            items={items}
+                            currentEvent={currentEvent}
+                            onWore={fetchItems}
+                        />
                     </div>
                 )}
 
-                {tab === 'history' && <OutfitHistory items={items} />}
+                {/* Tab: History */}
+                {tab === 'history' && (
+                    <OutfitHistory items={items} />
+                )}
 
-                {tab === 'settings' && <SettingsPage />}
-
-                {tab === 'profile' && <ProfilePage session={session} onLogout={handleLogout} />}
+                {/* Tab: Settings */}
+                {tab === 'settings' && (
+                    <SettingsPage onClearAll={handleClearAll} />
+                )}
             </div>
         </div>
     );
