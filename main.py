@@ -79,7 +79,7 @@ class OutfitHistoryCreate(BaseModel):
 def get_profile_photo():
     profile_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
     if os.path.exists(profile_path):
-        return {"profile_photo": profile_path}
+        return {"profile_photo": profile_path.replace("\\", "/")}
     return {"profile_photo": None}
 
 
@@ -88,14 +88,17 @@ async def upload_profile_photo(file: UploadFile = File(...)):
     profile_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
     with open(profile_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
-    return {"profile_photo": profile_path}
+    return {"profile_photo": profile_path.replace("\\", "/")}
 
 
 @app.delete("/api/profile-photo")
 def delete_profile_photo():
     profile_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
     if os.path.exists(profile_path):
-        os.remove(profile_path)
+        try:
+            os.remove(profile_path)
+        except Exception:
+            pass
     return {"status": "success"}
 
 
@@ -130,7 +133,7 @@ async def upload_image(
         traceback.print_exc()
         raise HTTPException(status_code=422, detail=f"AI tagging failed: {e}")
 
-    return {"image_path": local_path, "tags": tags}
+    return {"image_path": local_path.replace("\\", "/"), "tags": tags}
 
 
 @app.post("/api/items")

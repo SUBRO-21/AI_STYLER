@@ -20,13 +20,24 @@ All data (photos, database, and outfit history) is stored **privately on your ow
 
 ## Quick Start (Run Locally)
 
-### 1. Clone the repository
+### Option A: One-Click Launch (Easiest)
+
+- **Windows**: Double-click `run.bat` (or run `.\run.bat` in PowerShell/CMD)
+- **macOS / Linux**: Run `chmod +x run.sh && ./run.sh`
+
+*(The script automatically sets up the Python virtual environment, installs dependencies, and launches the local web server at http://localhost:8000).*
+
+---
+
+### Option B: Manual Setup
+
+#### 1. Clone the repository
 ```bash
 git clone https://github.com/your-username/AI_STYLER.git
 cd AI_STYLER
 ```
 
-### 2. Set up virtual environment & install dependencies
+#### 2. Set up virtual environment & install dependencies
 ```bash
 # Windows
 python -m venv venv
@@ -39,7 +50,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Add your Gemini API Key
+#### 3. Add your Gemini API Key (Optional in `.env`, or via UI)
 Get a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
 
 Create a `.env` file from the example:
@@ -52,7 +63,7 @@ GEMINI_API_KEY=your_actual_gemini_api_key
 ```
 *(Alternatively, you can skip this step and paste your API key directly in the **Settings** tab within the app UI).*
 
-### 4. Start the app
+#### 4. Start the app
 ```bash
 python main.py
 ```
