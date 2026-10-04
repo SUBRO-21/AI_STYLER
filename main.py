@@ -1,7 +1,7 @@
 import os
+import json
 import uuid
 import shutil
-import tempfile
 import traceback
 import requests
 from urllib.parse import quote
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 import database
 import llm_service
 
-app = FastAPI(title="AI Stylist")
+app = FastAPI(title="AI Stylist (Local)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,39 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Use /tmp on Vercel/serverless environments, local uploads/ folder otherwise
-IS_SERVERLESS = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
-UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "ai_styler_uploads") if IS_SERVERLESS else "uploads"
+UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-try:
-    database.init_db()
-except Exception as e:
-    print(f"Warning: Database init failed on import: {e}")
+database.init_db()
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     return Response(status_code=204)
-
-
-# ── Storage Helper ────────────────────────────────────────────────────────────
-
-def save_upload(file_path: str, filename: str) -> str:
-    """If CLOUDINARY_URL is configured, upload to Cloudinary. Otherwise return local path."""
-    cloudinary_url = os.getenv("CLOUDINARY_URL")
-    if cloudinary_url:
-        import cloudinary
-        import cloudinary.uploader
-        cloudinary.config(cloudinary_url=cloudinary_url)
-        clean_name = os.path.splitext(filename)[0]
-        result = cloudinary.uploader.upload(
-            file_path,
-            public_id=f"ai-styler/{clean_name}",
-            overwrite=True,
-        )
-        return result["secure_url"]
-    return file_path
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -73,7 +48,7 @@ class ItemCreate(BaseModel):
     description: str
 
 class AvailabilityUpdate(BaseModel):
-    availability: str
+    availability: str   # 'available' | 'washing' | 'damaged'
 
 class EventInput(BaseModel):
     description: str
@@ -110,27 +85,30 @@ def get_profile_photo():
 
 @app.post("/api/profile-photo")
 async def upload_profile_photo(file: UploadFile = File(...)):
-    local_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
-    with open(local_path, "wb") as buf:
+    profile_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
+    with open(profile_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
-    stored_path = save_upload(local_path, "_profile_user.jpg")
-    return {"profile_photo": stored_path}
+    return {"profile_photo": profile_path}
 
 
 @app.delete("/api/profile-photo")
 def delete_profile_photo():
     profile_path = os.path.join(UPLOAD_DIR, "_profile_user.jpg")
     if os.path.exists(profile_path):
-        try:
-            os.remove(profile_path)
-        except Exception:
-            pass
+        os.remove(profile_path)
     return {"status": "success"}
 
 
 @app.get("/api/profile-stats")
 def get_profile_stats():
-    return database.get_stats()
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as n FROM items")
+    item_count = dict(cursor.fetchone())["n"]
+    cursor.execute("SELECT COUNT(*) as n FROM outfit_history")
+    outfit_count = dict(cursor.fetchone())["n"]
+    conn.close()
+    return {"item_count": item_count, "outfit_count": outfit_count}
 
 
 # ── Wardrobe Item Endpoints ────────────────────────────────────────────────────
@@ -152,32 +130,64 @@ async def upload_image(
         traceback.print_exc()
         raise HTTPException(status_code=422, detail=f"AI tagging failed: {e}")
 
-    stored_path = save_upload(local_path, safe_name)
-    return {"image_path": stored_path, "tags": tags}
+    return {"image_path": local_path, "tags": tags}
 
 
 @app.post("/api/items")
 def create_item(item: ItemCreate):
-    item_id = database.insert_item(
-        item.image_path, item.category, item.sub_type,
-        item.color, item.formality, item.description
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        '''INSERT INTO items (image_path, category, sub_type, color, formality, description)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (item.image_path, item.category, item.sub_type, item.color, item.formality, item.description)
     )
+    item_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
     return {"id": item_id, "status": "success"}
 
 
 @app.get("/api/items")
 def get_items():
-    return database.get_items()
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM items ORDER BY created_at DESC")
+    items = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("SELECT item_ids, created_at FROM outfit_history ORDER BY created_at DESC")
+    history_rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    last_worn: dict = {}
+    for row in history_rows:
+        try:
+            for iid in json.loads(row["item_ids"]):
+                if iid not in last_worn:
+                    last_worn[iid] = row["created_at"]
+        except Exception:
+            pass
+
+    for item in items:
+        item["last_worn"] = last_worn.get(item["id"])
+    return items
 
 
 @app.delete("/api/items/{item_id}")
 def delete_item(item_id: int):
-    image_path = database.delete_item(item_id)
-    if image_path and os.path.exists(image_path):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT image_path FROM items WHERE id = ?", (item_id,))
+    row = cursor.fetchone()
+    if row and row["image_path"] and os.path.exists(row["image_path"]):
         try:
-            os.remove(image_path)
+            os.remove(row["image_path"])
         except Exception:
             pass
+
+    cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
     return {"status": "success"}
 
 
@@ -185,7 +195,14 @@ def delete_item(item_id: int):
 def update_availability(item_id: int, update: AvailabilityUpdate):
     if update.availability not in ("available", "washing", "damaged"):
         raise HTTPException(status_code=400, detail="availability must be 'available', 'washing', or 'damaged'")
-    database.update_availability(item_id, update.availability)
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE items SET availability = ?, availability_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (update.availability, item_id)
+    )
+    conn.commit()
+    conn.close()
     return {"status": "success"}
 
 
@@ -234,7 +251,15 @@ def generate_outfit(
     req: OutfitGenerationRequest,
     x_gemini_key: Optional[str] = Header(default=None),
 ):
-    available_items = database.get_available_items()
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, category, sub_type, color, formality, description, image_path "
+        "FROM items WHERE availability = 'available'"
+    )
+    available_items = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
     if not available_items:
         raise HTTPException(status_code=400, detail="No available clothes found in wardrobe. Upload clothes first!")
 
@@ -274,49 +299,73 @@ def generate_outfit(
 
 @app.post("/api/feedback")
 def save_feedback(req: FeedbackRequest):
-    database.insert_feedback(
-        req.outfit_items, req.weather_fit, req.event_fit,
-        req.overall_note, req.feedback_type, req.feedback_text
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        '''INSERT INTO feedback (outfit_items, weather_fit, event_fit, overall_note, feedback_type, feedback_text)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (req.outfit_items, req.weather_fit, req.event_fit, req.overall_note, req.feedback_type, req.feedback_text)
     )
+    conn.commit()
+    conn.close()
     return {"status": "success"}
 
 
 @app.post("/api/outfit-history")
 def save_outfit_history(req: OutfitHistoryCreate):
-    database.insert_outfit_history(req.item_ids, req.event_description, req.date)
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO outfit_history (item_ids, event_description, date) VALUES (?, ?, ?)",
+        (req.item_ids, req.event_description, req.date)
+    )
+    conn.commit()
+    conn.close()
     return {"status": "success"}
 
 
 @app.get("/api/outfit-history")
 def get_outfit_history():
-    return database.get_outfit_history()
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM outfit_history ORDER BY created_at DESC")
+    history = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return history
 
 
 @app.delete("/api/clear-data")
 def clear_all_data():
-    database.clear_all_data()
-    if os.path.exists(UPLOAD_DIR):
-        for f in os.listdir(UPLOAD_DIR):
-            fp = os.path.join(UPLOAD_DIR, f)
-            if os.path.isfile(fp):
-                try:
-                    os.remove(fp)
-                except Exception:
-                    pass
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM items")
+    cursor.execute("DELETE FROM outfit_history")
+    cursor.execute("DELETE FROM feedback")
+    conn.commit()
+    conn.close()
+
+    # Clean local uploads folder except profile if needed
+    for f in os.listdir(UPLOAD_DIR):
+        fp = os.path.join(UPLOAD_DIR, f)
+        if os.path.isfile(fp):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+
     return {"status": "success"}
 
 
-# ── Static files & Local Dev Server ───────────────────────────────────────────
+# ── Static files & Local Server ───────────────────────────────────────────────
 
-if os.path.exists("uploads"):
-    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-if os.path.exists("static"):
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+os.makedirs("static", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "="*50)
-    print(" AI STYLIST RUNNING")
+    print(" AI STYLIST RUNNING LOCALLY")
     print(" Open in browser: http://localhost:8000")
     print("="*50 + "\n")
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
